@@ -44,7 +44,26 @@ class News extends React.Component{
 
 fuck!!!!!!!!!!!!!!!!!!!
 看文档!!!!!!!!!!!!!!
-[extend-observable][1]
+
+
+
+**[extend-observable][1]**
+
+## this
+
+``` javascript 
+...component/
+  handleMoreClick = () => {
+   const { fetchFollowers, nextHrefs } =userStore;
+    const nextHref$ = nextHrefs[FETCH_FOLLOWERS];
+    fetchFollowers(nextHref$);// **注意**
+	}
+	...store{
+	@action fetchFollowers(){
+		// **在这里获取this的话this指向谁?**
+	 }
+	}
+```
 
 
 [作者解释computed和observe,autorun之间的计算数据情况][2]
