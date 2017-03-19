@@ -190,3 +190,7 @@ private bindDependencies() {
 至此所有的依赖完成计算,然后如果有依赖发生改变,就会重新走一遍流程,完成新一轮的计算.
 
 
+![MindMap][1]
+
+
+  [1]: ./images/Screenshot%20from%202017-03-19%2022-17-35.png "Screenshot from 2017-03-19 22-17-35"
