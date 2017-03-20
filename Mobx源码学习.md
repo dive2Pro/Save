@@ -192,5 +192,55 @@ private bindDependencies() {
 
 ![MindMap][1]
 
+.....
+
+
+### watch
+响应观测的对象,那么就要把观测的对象和本方法联系起来,也就是加入依赖追踪.
+
+```javascript
+mobx.watch(()=>mobx.value(),func);
+watch = function (func,fn){
+	const d = new DNode(true)  // 新建一个DNode
+	let vatal
+	d.nextState= function(){
+	 vatal = func();         // 将依赖入栈,获取值
+	 d.nextState = function(){ // 	   //  当依赖的值发生变化后的响应
+	   d.depose();       // 删除依赖 -- 以便重新建立依赖
+	   fn();               // 调用回调
+	   return false;  // 返回 false -- 不去追踪依赖本Dnode 的值
+	 }
+	 return false;
+	}
+	
+	d.computeNextState(); // 计算依赖
+	return [vatal,()=>d.dispose()]
+}
+
+```
+
+## defineObservableProperty
+
+```
+	function defineObservableProperty(obj,key,value){
+		const atom = createObservableValue(value) // 对值包装
+			definePropertyForObservable(obj,key,atom) // 作为属性加入对象
+}
+
+	function definePropertyForObservable(obj,key,atom){
+		Object.defineProperty(obj,key,{
+			get function(){
+				return atom()
+			},
+			set function(v){
+				atom(v)
+			},
+			enumerable:true,
+			configurable:true;
+		}
+	}
+
+```
+
 
   [1]: ./images/Screenshot%20from%202017-03-19%2022-17-35.png "Screenshot from 2017-03-19 22-17-35"
