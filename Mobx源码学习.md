@@ -242,5 +242,24 @@ watch = function (func,fn){
 
 ```
 
+## schedule
+
+* ready 
+	 ```javascript
+	 DNode. makeReady(){
+	 ...
+	    if (this.observers.length === 0) // otherwise, let one of the observers do that :)
+            Scheduler.scheduleReady();}
+	 ```
+	 每次依赖完成后触发
+* batch
+   ```JavaScript
+   mobservable.batch(() => { 
+  	order.price = 10;
+  	order.amount = 3;
+  	order.amount = 5;
+	})
+	order.total// 总是在batch完成后调用
+   ```
 
   [1]: ./images/Screenshot%20from%202017-03-19%2022-17-35.png "Screenshot from 2017-03-19 22-17-35"
