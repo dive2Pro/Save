@@ -261,5 +261,94 @@ watch = function (func,fn){
 	})
 	order.total// 总是在batch完成后调用
    ```
+   
+   
+   # ReactMixin!!!!
+   
+
+``` javascript
+mobservableStatic.ReactObservingMixin = {
+    componentWillMount: function() {
+        var baseRender = this.render;
+        this.render = function() {
+            if (this._watchDisposer)
+                this._watchDisposer();
+            var[rendering, disposer] = mobservableStatic.watch(() => baseRender.call(this), () => {
+                this.forceUpdate();
+            });
+            this._watchDisposer = disposer;
+            return rendering;
+        }
+    },
+    
+    componentWillUnmount: function() {
+        if (this._watchDisposer)
+            this._watchDisposer();
+    }
+}
+```
+这里就是引入React的最初实现！
+```javascript
+var[rendering, disposer] = mobservableStatic.watch(() => baseRender.call(this), () => {
+                this.forceUpdate();
+            });
+```
+所以：
+1.  render是函数，所以中间引用的各项依赖就会DNode入栈
+2.  扩展render函数，渲染完成后其实render就是个observes
+3.  每次依赖的数据改变，直接调用watch方法，直接render，从而不和react的生命周期有关，数据改变，重新渲染！
+4.  mobx帮你做了数据的比对，改变就触发，所以粒度越细渲染越高效 -- [React的最佳实践][2]
+
+ES5 React 的使用
+[什么是mixin？][3]
+```javascript
+React.createClass({
+mixin:[mobx.ReactObservingMixin]
+})
+```
+ES6 和react的使用
+```javascript
+mobservableStatic.ObservingComponent = function(componentClass) {
+    var baseMount = componentClass.componentWillMount;
+    var baseUnmount = componentClass.componentWillUnmount;
+    componentClass.prototype.componentWillMount = function() {
+        mobservableStatic.ObserverMixin.componentWillMount.apply(this, arguments);
+        return baseMount && baseMount.apply(this, arguments);
+    };
+    componentClass.prototype.componentWillUnmount = function() {
+        mobservableStatic.ObserverMixin.componentWillUnmount.apply(this, arguments);
+        return baseUnmount && baseUnmount.apply(this, arguments);
+    };
+    componentClass.prototype.shouldComponentUpdate = mobservableStatic.ObserverMixin.shouldComponentUpdate;
+    return componentClass;
+};
+```
+
+## Ts , 清理命名空间
+> all internal methods / classes are now hidden in '_' namespace for clean top level api
+
+like this :
+
+``` typescript
+namespace mobservable {
+
+    export function array<T>(values?:T[]): _.ObservableArray<T> {
+        return new _.ObservableArray(values);
+    }
+
+    export namespace _ {
+        // Workaround to make sure ObservableArray extends Array
+        class StubArray {
+        }
+        StubArray.prototype = [];
+    
+        export class ObservableArray<T> extends StubArray implements Mobservable.IObservableArray<T> {
+            [n: number]: T;
+    
+```
+
+
 
   [1]: ./images/Screenshot%20from%202017-03-19%2022-17-35.png "Screenshot from 2017-03-19 22-17-35"
+  [2]: https://mobx.js.org/best/react-performance.html
+  [3]: https://segmentfault.com/a/1190000003016446
