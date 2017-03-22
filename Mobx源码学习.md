@@ -347,6 +347,66 @@ namespace mobservable {
     
 ```
 
+## 异步
+只要是方法,在mobx中都是计算属性.而它的渲染函数是这样的
+
+源代码
+```typescript
+  // the state of something we are observing has changed..
+            notifyStateChange(observable:DataNode, stateDidActuallyChange:boolean) {
+                if (observable.state === NodeState.STALE) {
+                    if (++this.dependencyStaleCount === 1)
+                        this.markStale();
+                } else { // not stale, thus ready since pending states are not propagated
+                    if (stateDidActuallyChange)
+                        this.dependencyChangeCount += 1;
+                    if (--this.dependencyStaleCount === 0) { // all dependencies are ready
+                        this.state = NodeState.PENDING;
+                        Scheduler.schedule(() => {
+                            // did any of the observables really change?
+                            if (this.dependencyChangeCount > 0)
+                                this.computeNextState();
+                            else
+                                // we're done, but didn't change, lets make sure verybody knows..
+                                this.markReady(false);
+                            this.dependencyChangeCount = 0;
+                        });
+                    }
+                }
+            }
+```
+只要它的依赖有改变,就会去计算并重新绑定.而` this.computeNextState();`这段代码是作为回调放在Scheduler中调用的.这里只要schedule是异步的,计算也是异步的.
+```typescript
+public static schedule(func:Lambda, async:boolean) {
+                if (async) {
+                    Scheduler.asyncTasks.push(func);
+                    if (!Scheduler.isAsyncScheduled) {
+                        setTimeout(function() {                   // 异步!!!
+                            Scheduler.processAsyncViews();
+                        }, 1);
+                    }
+                } else if (Scheduler.inBatch < 1) {
+                    func();
+                } else {
+                    Scheduler.tasks[Scheduler.tasks.length] = func;
+                }
+            }
+            
+            private static processAsyncViews() {
+                var f:Mobservable.Lambda, i = -1;
+                while(f = Scheduler.asyncTasks[++i]) {
+                    f();
+                }
+                Scheduler.asyncTasks = [];
+                Scheduler.isAsyncScheduled = false;
+                Scheduler.asyncViewsReady.emit();
+            }
+            
+            public static awaitViews(f:Mobservable.Lambda):Mobservable.Lambda {
+                return Scheduler.asyncViewsReady.once(f);
+            }
+```
+
 
 
   [1]: ./images/Screenshot%20from%202017-03-19%2022-17-35.png "Screenshot from 2017-03-19 22-17-35"
