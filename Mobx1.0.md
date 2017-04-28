@@ -588,6 +588,9 @@ makeready后被调用,通知自己的观察者,或者说,自己的观察者是�
 ```
 
 
+----
+
+## ObservableObject
 
 
 
@@ -597,7 +600,9 @@ makeready后被调用,通知自己的观察者,或者说,自己的观察者是�
 
 
 
-ValueMode
+
+
+## ValueMode
 
 
 ```typescript
@@ -611,5 +616,170 @@ export enum ValueMode {
 ```
 
 
-mobservableViewStack
+## mobservableViewStack
+
+> 把对象转化成 reactive
+
+```typescript
+   constructor(){
+   ...
+
+
+   Object.defineProperty(target, "$mobservable", {
+   			enumerable: false,
+   			configurable: false,
+   			value: this  // 在 asReactive中代理使用
+   		});
+   }
+
+   	static asReactive(target, context:IContextInfoStruct, mode:ValueMode):ObservableObject {
+   		if (target.$mobservable)
+   			return target.$mobservable;
+   		return new ObservableObject(target, context, mode);
+   	}
+
+
+```
+
+设置值的函数 重写:
+
+```typescript
+set(propName, value) {
+		if (this.values[propName])
+			this.target[propName] = value; // the property setter will make 'value' reactive if needed.
+		else
+			this.defineReactiveProperty(propName, value);//转化该值
+	}
+```
+
+
+将键值对对象转化为$mobservable的reactive属性
+
+```typescript
+
+private defineReactiveProperty(propName, value) {
+		let observable: ObservableView<any>|ObservableValue<any>;
+		let context = {
+			object: this.context.object,
+			name: `${this.context.name || ""}.${propName}`
+		};
+
+		if (typeof value === "function" && value.length === 0)
+			observable = new ObservableView(value, this.target, context, false);
+		else if (value instanceof AsStructure && typeof value.value === "function" && value.value.length === 0)
+			observable = new ObservableView(value.value, this.target, context, true);
+		else
+			observable = new ObservableValue(value, this.mode, context);
+
+		this.values[propName] = observable;
+
+		// 劫持propName属性的get,set方法
+		Object.defineProperty(this.target, propName, {
+			configurable: true,
+			enumerable: observable instanceof ObservableValue,
+			get: function() {
+				return this.$mobservable ? this.$mobservable.values[propName].get() : undefined;
+			},
+			set: function(newValue) {
+				const oldValue = this.$mobservable.values[propName].get();
+				this.$mobservable.values[propName].set(newValue);
+				this.$mobservable._events.emit(<IObjectChange<any, any>>{
+					type: "update",
+					object: this,
+					name: propName,
+					oldValue
+				});
+			}
+		});
+
+		this._events.emit(<IObjectChange<any, any>>{
+			type: "add",
+			object: this.target,
+			name: propName
+		});
+	}
+```
+
+----
+
+# ObservableView
+
+> 继承自 ViewNode
+
+
+get/set
+
+```typescript
+get():T {
+       ...
+        if (this.isSleeping) {
+            if (isComputingView()) {
+                //  有Node依赖于这个的计算值
+                this.wakeUp(); // note: wakeup triggers a compute
+                this.notifyObserved(); // 入栈,成为其他的依赖
+            } else {
+                //  不在其他的mobx栈中,只是更新一下值
+                this.wakeUp();
+                this.tryToSleep();
+            }
+        } else {
+            // we are already up to date, somebody is just inspecting our current value
+            this.notifyObserved();
+        }
+
+        if (this.hasCycle)
+            throw new Error(`[mobservable.view '${this.context.name}'] Cycle detected`);
+        return this._value;
+    }
+ // 计算属性不允许设置值
+ set(x) {
+        throwingViewSetter(this.context.name)();
+    }
+```
+
+`compute` 将传入的 `func` 运行一遍获取返回值作为新值
+
+
+```typescript
+
+ compute() {
+        // this cycle detection mechanism is primarily for lazy computed values; other cycles are already detected in the dependency tree
+        if (this.isComputing)
+            throw new Error(`[mobservable.view '${this.context.name}'] Cycle detected`);
+        this.isComputing = true;
+        const newValue = this.func.call(this.scope);
+        this.isComputing = false;
+        const changed = this.compareStructural ? !deepEquals(newValue, this._value) : newValue !== this._value;
+        if (changed) {
+            const oldValue = this._value;
+            this._value = newValue;
+            this.changeEvent.emit(newValue, oldValue);
+            return true;
+        }
+        return false;
+    }
+```
+
+
+对计算值的观测,是其他重要方法,比如`autorun`的实现基础:
+
+```typescript
+    observe(listener:(newValue:T, oldValue:T)=>void, fireImmediately=false):Lambda {
+        this.setRefCount(+1); // 保持唤醒状态
+        if (fireImmediately)
+            listener(this.get(), undefined);
+        var disposer = this.changeEvent.on(listener);
+        // 返回的值再次调用就会被清除
+        return once(() => {
+            this.setRefCount(-1);
+            disposer();
+        });
+    }
+
+```
+
+
+
+
+
 
