@@ -779,6 +779,300 @@ get():T {
 ```
 
 
+---
+
+# ObservableArray
+
+> 用自己的实现替换数组的方法
+
+参与工作的有两大类:
+
+   - ObservableArrayAdministration: $mobservable , 和reactive有关,处理状态(比如:长度,内容)的改变事件
+   - ObservableArray: 数组类,在其原型上重写所有的数组方法
+
+`ObservableArray`是继承自`StubArray`,它的定义很简单:
+
+```typescript
+export class StubArray {
+}
+
+StubArray.prototype = [];
+```
+
+
+劫持数组的部分原型函数,这些不会改变数组自身:
+
+```typescript
+/**
+ * Wrap function from prototype
+ */
+[
+    "concat",
+    "every",
+    "filter",
+    "forEach",
+    "indexOf",
+    "join",
+    "lastIndexOf",
+    "map",
+    "reduce",
+    "reduceRight",
+    "slice",
+    "some",
+].forEach(funcName => {
+    var baseFunc = Array.prototype[funcName];
+    Object.defineProperty(ObservableArray.prototype, funcName, {
+        configurable: false,
+        writable: true,
+        enumerable: false,
+        value: function() {
+            this.$mobservable.notifyObserved();// 将自身放入mobxStacks中
+            return baseFunc.apply(this.$mobservable.values, arguments);
+        }
+    });
+});
+
+```
+
+
+## `ObservableArray`
+
+构造:
+```typescript
+   constructor(initialValues:T[], mode:ValueMode, context: IContextInfoStruct) {
+        super();
+        Object.defineProperty(this, "$mobservable", {
+            enumerable: false,
+            configurable: false,
+            value : new ObservableArrayAdministration(this, mode, context) // 和其绑定
+        });
+
+        if (initialValues && initialValues.length)
+            this.replace(initialValues);            // 初始化值
+    }
+
+    // spliceWithArray 用来处理所有的数组拼接,并修改其长度并发出通知
+     replace(newItems:T[]) {
+            return this.$mobservable.spliceWithArray(0, this.$mobservable.values.length, newItems);
+        }
+```
+
+数组中所有会改变自身的函数都被重写,且都会调用`spliceWithArray`函数:
+
+```typescript
+ clear(): T[] {
+        return this.splice(0);
+    }
+
+    replace(newItems:T[]) {
+        return this.$mobservable.spliceWithArray(0, this.$mobservable.values.length, newItems);
+    }
+    splice(index:number, deleteCount?:number, ...newItems:T[]):T[] {
+        switch(arguments.length) {
+            case 0:
+                return [];
+            case 1:
+                return this.$mobservable.spliceWithArray(index);
+            case 2:
+                return this.$mobservable.spliceWithArray(index, deleteCount);
+        }
+        return this.$mobservable.spliceWithArray(index, deleteCount, newItems);
+    }
+
+    push(...items: T[]): number {
+        this.$mobservable.spliceWithArray(this.$mobservable.values.length, 0, items);
+        return this.$mobservable.values.length;
+    }
+
+    pop(): T {
+        return this.splice(Math.max(this.$mobservable.values.length - 1, 0), 1)[0];
+    }
+
+    shift(): T {
+        return this.splice(0, 1)[0]
+    }
+
+    unshift(...items: T[]): number {
+        this.$mobservable.spliceWithArray(0, 0, items);
+        return this.$mobservable.values.length;
+    }
+
+    reverse():T[] {
+        return this.replace(this.$mobservable.values.reverse());
+    }
+
+    sort(compareFn?: (a: T, b: T) => number): T[] {
+        return this.replace(this.$mobservable.values.sort.apply(this.$mobservable.values, arguments));
+    }
+
+    remove(value:T):boolean {
+        var idx = this.$mobservable.values.indexOf(value);
+        if (idx > -1) {
+            this.splice(idx, 1);
+            return true;
+        }
+        return false;
+    }
+ ```
+
+## ObservableArrayAdministration
+
+内部的 `spliceWithArray`是核心,
+
+
+```typescript
+
+spliceWithArray(index:number, deleteCount?:number, newItems?:T[]):T[] {
+        var length = this.values.length;
+        ... // 计算数量
+
+        if (newItems === undefined)
+            newItems = [];
+        else  //将子类转化为reactive
+            newItems = <T[]> newItems.map((value) => this.makeReactiveArrayItem(value));
+
+        var lengthDelta = newItems.length - deleteCount;
+        this.updateLength(length, lengthDelta); //  更新数组长度
+        var res:T[] = this.values.splice(index, deleteCount, ...newItems);
+        // 通知拼接的事件
+        this.notifySplice(index, res, newItems);
+        return res;
+    }
+```
+
+
+
+
+目前只做到自身的长度改变时发出事件,有一个疑问,那么如果某个子类的值的改变,在哪里响应?
+类中有这个方法`notifyChildUpdate`,肯定有关,发现是在
+
+```typescript
+// 劫持 set/get函数
+function createArrayBufferItem(index:number) {
+   // 生成PropertyDescriptor到ENUMERABLE_PROPS数组中
+    var prop = ENUMERABLE_PROPS[index] = {
+        enumerable: true,
+        configurable: true,
+        set: function(value) {
+            const impl = this.$mobservable;
+            const values = impl.values;
+            assertUnwrapped(value, "Modifiers cannot be used on array values. For non-reactive array values use makeReactive(asFlat(array)).");
+            if (index < values.length) {
+                checkIfStateIsBeingModifiedDuringView(impl.context);
+                var oldValue = values[index];
+                var changed = impl.mode === ValueMode.Structure ? !deepEquals(oldValue, value) : oldValue !== value;
+                if (changed) {
+                    values[index] = impl.makeReactiveArrayItem(value);
+                    impl.notifyChildUpdate(index, oldValue); // 这里被调用
+                }
+            }
+            else if (index === values.length)
+                this.push(impl.makeReactiveArrayItem(value));
+            else
+                throw new Error(`[mobservable.array] Index out of bounds, ${index} is larger than ${values.length}`);
+        },
+        get: function() {
+            const impl = this.$mobservable;
+            if (impl && index < impl.values.length) {
+                impl.notifyObserved();
+                return impl.values[index];
+            }
+            return undefined;
+        }
+    };
+    Object.defineProperty(ObservableArray.prototype, "" + index, {
+        enumerable: false,
+        configurable: true,
+        get: prop.get,
+        set: prop.set
+    });
+}
+
+```
+
+同时,updateLength的调用链上也有这个方法:
+
+```typescript
+ private updateLength(oldLength:number, delta:number) {
+        if (delta < 0) {
+            checkIfStateIsBeingModifiedDuringView(this.context);
+            for(var i = oldLength + delta; i < oldLength; i++)
+                delete this.array[i]; // bit faster but mem inefficient:
+                //Object.defineProperty(this, <string><any> i, notEnumerableProp);
+        } else if (delta > 0) {
+            checkIfStateIsBeingModifiedDuringView(this.context);
+            if (oldLength + delta > OBSERVABLE_ARRAY_BUFFER_SIZE)
+                reserveArrayBuffer(oldLength + delta);// 通知改变
+            // funny enough, this is faster than slicing ENUMERABLE_PROPS into defineProperties, and faster as a temporarily map
+            for (var i = oldLength, end = oldLength + delta; i < end; i++)
+                Object.defineProperty(this.array, <string><any> i, ENUMERABLE_PROPS[i])//拿到改变该位置的PropertyDescriptor
+        }
+    }
+```
+
+在mobx中数组初始长度为 1000,这样是出于什么考虑?性能:在修改值时已经在reactive中,日常使用的
+大部分数组不超过该长度时,不需要重新来转化
+
+```typescript
+  /**
+    * This array buffer contains two lists of properties, so that all arrays
+    * can recycle their property definitions, which significantly improves performance of creating
+    * properties on the fly.
+    *
+    */
+var OBSERVABLE_ARRAY_BUFFER_SIZE = 0;
+var ENUMERABLE_PROPS : PropertyDescriptor[] = [];
+
+function reserveArrayBuffer(max:number) {
+    for (var index = OBSERVABLE_ARRAY_BUFFER_SIZE; index < max; index++)
+        createArrayBufferItem(index);
+    OBSERVABLE_ARRAY_BUFFER_SIZE = max;
+}
+// 直接调用该函数,分配长度
+reserveArrayBuffer(1000);
+
+```
+
+
+
+
+# 主要方法的实现
+
+## autorun
+
+使用方法:
+
+```typescript
+autorun(()=>{
+ 回调函数内需要有observable元素
+})
+```
+
+源码 :
+
+```typescript
+function autorun(){
+
+   ...
+  // 回调函数会在 compute中被调用,期间开辟的新栈供依赖绑定
+
+  const observable = new ObservableView(unwrappedView, scope, {
+        object: scope || view,
+        name: view.name
+    }, mode === ValueMode.Structure);
+    // 保持唤醒状态
+    observable.setRefCount(+1);
+    const disposer = once(() => {
+        observable.setRefCount(-1);
+    });
+    (<any>disposer).$mobservable = observable;
+
+    return disposer;
+
+}
+```
+
+
 
 
 
